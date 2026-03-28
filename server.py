@@ -171,6 +171,73 @@ def _info(film_id: int) -> str:
     return result
 
 
+def _recommend(description: str, genre: str = "", year_from: int = 0, min_rating: float = 0, min_votes: int = 0, limit: int = 5) -> str:
+    """Search films by description/plot keywords."""
+    keywords = [w.lower() for w in description.split() if len(w) > 3]
+    if not keywords:
+        return "Podaj opis filmu którego szukasz (min. kilka słów)."
+
+    # Build search params
+    genre_lower = genre.lower().strip() if genre else ""
+    genre_id = GENRE_MAP.get(genre_lower)
+    params = ["query="]
+    if genre_id:
+        params.append(f"genreIds={genre_id}")
+    if year_from:
+        params.append(f"startYear={year_from}")
+    if min_votes:
+        params.append(f"startCount={int(min_votes)}")
+
+    # Fetch candidates (up to 100 films)
+    all_hits = []
+    seen_ids = set()
+    for page in range(1, 11):
+        page_params = params + [f"page={page}"]
+        data = _get(f"/films/search?{'&'.join(page_params)}")
+        if not data or not data.get("searchHits"):
+            break
+        for h in data["searchHits"]:
+            fid = h.get("id")
+            if fid not in seen_ids:
+                seen_ids.add(fid)
+                all_hits.append(h)
+        if len(data["searchHits"]) < 10:
+            break
+
+    # Score each film by keyword matches in description
+    scored = []
+    for h in all_hits:
+        fid = h.get("id")
+        info = _get(f"/title/{fid}/info") or _get(f"/film/{fid}/info") or {}
+        rating_data = _get(f"/film/{fid}/rating") or {}
+        rate = round(float(rating_data.get("rate", 0)), 1)
+        votes = int(rating_data.get("count", 0))
+        title = info.get("title", f"Film {fid}")
+        film_year = info.get("year", "?")
+
+        if min_rating and rate < min_rating:
+            continue
+
+        desc_data = _get(f"/film/{fid}/description") or {}
+        synopsis = desc_data.get("synopsis", "").lower()
+        title_lower = title.lower()
+
+        # Score: how many keywords match in title + synopsis
+        score = sum(1 for kw in keywords if kw in synopsis or kw in title_lower)
+        if score > 0:
+            scored.append((score, rate, votes, title, film_year, fid, desc_data.get("synopsis", "")[:200]))
+
+    if not scored:
+        return f"Nie znaleziono filmów pasujących do opisu: '{description}'"
+
+    scored.sort(key=lambda x: (-x[0], -x[1]))
+    results = []
+    for score, rate, votes, title, film_year, fid, synopsis in scored[:limit]:
+        results.append(f"- {title} ({film_year}) — {rate}/10 ({votes} głosów) [id:{fid}] [trafień: {score}]\n  {synopsis}...")
+
+    return f"Filmy pasujące do: '{description}':\n\n" + "\n\n".join(results)
+
+
 # --- MCP Tool definitions ---
 
 TOOLS = [
@@ -233,6 +300,22 @@ TOOLS = [
         description="List available genre names for search.",
         inputSchema={"type": "object", "properties": {}},
     ),
+    Tool(
+        name="filmweb_recommend",
+        description="Find films by plot description. Searches synopses for keyword matches. Example: 'facet budzi się w pętli czasowej' or 'samotna kobieta w nawiedzonym domu'.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "description": {"type": "string", "description": "Plot description or keywords (Polish or English)"},
+                "genre": {"type": "string", "description": "Optional genre filter (horror, thriller, dramat, komedia, sci-fi)"},
+                "year_from": {"type": "number", "description": "Films from this year onwards"},
+                "min_rating": {"type": "number", "description": "Minimum rating 1-10"},
+                "min_votes": {"type": "number", "description": "Minimum vote count"},
+                "limit": {"type": "number", "description": "Max results (default 5)"},
+            },
+            "required": ["description"],
+        },
+    ),
 ]
 
 
@@ -270,6 +353,15 @@ async def call_tool(name: str, arguments: dict):
     elif name == "filmweb_genres":
         genres = sorted(set(f"{n}" for n, _ in GENRE_MAP.items() if not n.isascii() or n in ("horror", "thriller", "drama", "comedy", "action", "sci-fi", "fantasy", "romance", "western", "war")))
         result = "Gatunki: " + ", ".join(genres)
+    elif name == "filmweb_recommend":
+        result = await asyncio.to_thread(
+            _recommend, arguments["description"],
+            genre=arguments.get("genre", ""),
+            year_from=int(arguments.get("year_from", 0)),
+            min_rating=float(arguments.get("min_rating", 0)),
+            min_votes=int(arguments.get("min_votes", 0)),
+            limit=int(arguments.get("limit", 5)),
+        )
     else:
         result = f"Nieznane: {name}"
 
