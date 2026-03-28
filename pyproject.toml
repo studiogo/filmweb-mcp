@@ -1,0 +1,17 @@
+[project]
+name = "filmweb-mcp"
+version = "0.1.0"
+description = "MCP server for searching movies on Filmweb.pl — ratings, reviews, genres, VOD platforms"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = [
+    "mcp>=1.0.0",
+]
+
+[project.scripts]
+filmweb-mcp = "server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
