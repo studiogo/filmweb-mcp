@@ -60,23 +60,41 @@ def _search(query: str, min_rating: float = 0, year: int = 0, year_from: int = 0
             break
 
     if genre_id or year or year_from or min_rating or min_votes:
-        params = ["orderBy=popularity"]
+        params = ["query="]
         if genre_id:
-            params.append(f"genres={genre_id}")
+            params.append(f"genreIds={genre_id}")
         if year:
             params.append(f"startYear={year}&endYear={year}")
         elif year_from:
             params.append(f"startYear={year_from}")
-        if min_rating:
-            params.append(f"startRate={int(min_rating)}")
         if min_votes:
             params.append(f"startCount={int(min_votes)}")
-        data = _get(f"/films/search?{'&'.join(params)}")
 
-        if data and data.get("searchHits"):
-            hits = data["searchHits"][:limit * 5]
+        # Paginacja z page (1-indexed, 10 wyników na stronę)
+        all_hits = []
+        max_pages = min(10, (limit * 3) // 10 + 1)
+        for page in range(1, max_pages + 1):
+            page_params = params + [f"page={page}"]
+            data = _get(f"/films/search?{'&'.join(page_params)}")
+            if not data or not data.get("searchHits"):
+                break
+            new_hits = data["searchHits"]
+            all_hits.extend(new_hits)
+            if len(new_hits) < 10:
+                break
+
+        if all_hits:
+            # Deduplikacja po ID
+            seen_ids = set()
+            unique_hits = []
+            for h in all_hits:
+                fid = h.get("id")
+                if fid not in seen_ids:
+                    seen_ids.add(fid)
+                    unique_hits.append(h)
+
             results = []
-            for h in hits:
+            for h in unique_hits:
                 if len(results) >= limit:
                     break
                 fid = h.get("id")
